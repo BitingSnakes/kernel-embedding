@@ -6,10 +6,10 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from multiprocessing import get_context
 from pathlib import Path
 
-import tiktoken
 import tree_sitter_c as tsc
 import tree_sitter_python as tsp
 import tree_sitter_rust as tsr
+from tokenizers import Tokenizer
 from tree_sitter import Language, Parser, Query, QueryCursor
 
 QUERY_STRINGS = {
@@ -52,6 +52,8 @@ ASM_SYMBOL_MACROS = {
     "WEAK",
 }
 COST_PER_1M_TOKENS = 0.15
+GEMMA_TOKENIZER_ID = os.environ.get("GEMMA_TOKENIZER_ID", "google/gemma-4-26B-A4B")
+GEMMA_TOKENIZER_REVISION = os.environ.get("GEMMA_TOKENIZER_REVISION", "main")
 
 _worker_parsers = None
 _worker_query_cursors = None
@@ -67,6 +69,18 @@ def supported_extensions():
         tuple(QUERY_STRINGS)
         + tuple(sorted(ASM_EXTENSIONS))
         + tuple(sorted(SHELL_EXTENSIONS))
+    )
+
+
+def build_tokenizer():
+    tokenizer_path = Path(GEMMA_TOKENIZER_ID)
+    if tokenizer_path.exists():
+        return Tokenizer.from_file(str(tokenizer_path))
+
+    return Tokenizer.from_pretrained(
+        GEMMA_TOKENIZER_ID,
+        revision=GEMMA_TOKENIZER_REVISION,
+        token=os.environ.get("HF_TOKEN"),
     )
 
 
@@ -101,7 +115,7 @@ def init_worker():
         extension: QueryCursor(Query(languages[extension], query_string))
         for extension, query_string in QUERY_STRINGS.items()
     }
-    _worker_tokenizer = tiktoken.get_encoding("cl100k_base")
+    _worker_tokenizer = build_tokenizer()
 
 
 def count_chunk(file_path: Path, source_code: bytes, start_byte: int, end_byte: int, kind: str):
@@ -113,7 +127,7 @@ def count_chunk(file_path: Path, source_code: bytes, start_byte: int, end_byte: 
     )
     char_count = len(contextualized_text)
     token_count = len(
-        _worker_tokenizer.encode(contextualized_text, disallowed_special=())
+        _worker_tokenizer.encode(contextualized_text, add_special_tokens=False).ids
     )
     return char_count, token_count
 
