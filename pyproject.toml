@@ -1,7 +1,7 @@
 [project]
 name = "kernel-embedding"
 version = "0.1.0"
-description = "Add your description here"
+description = "Approximate the price for Linux source code embedding in Gemini"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
