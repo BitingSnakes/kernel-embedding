@@ -2,6 +2,8 @@
 
 This repo contains a simple script to generate documents for embedding kernel code using tree-sitter. Also, it has an approximator of the price in Gemini for embedding kernel code, which is based on the number of tokens in the code and the price per token.
 
+We use the tokenizer from the `gemma-4` model, beause there is no public tokenizer for the `gemini-1.5-pro` model, and the `gemma-4` model is the closest one to the `gemini-1.5-pro` model in terms of architecture and tokenization.
+
 ## Download the kernel source code
 
 ```
