@@ -1,4 +1,6 @@
 import csv
+import hashlib
+import json
 import os
 import re
 import time
@@ -81,6 +83,8 @@ ASM_SYMBOL_MACROS = {
 COST_PER_1M_TOKENS = 0.15
 GEMMA_TOKENIZER_ID = os.environ.get("GEMMA_TOKENIZER_ID", "google/gemma-4-26B-A4B")
 GEMMA_TOKENIZER_REVISION = os.environ.get("GEMMA_TOKENIZER_REVISION", "main")
+DOCUMENTS_JSONL = "documents.jsonl"
+MANIFEST_JSON = "manifest.json"
 
 _worker_parsers = None
 _worker_query_cursors = None
@@ -148,7 +152,7 @@ def init_worker():
     _worker_tokenizer = build_tokenizer()
 
 
-def count_chunk(
+def build_chunk_document(
     file_path: Path, source_code: bytes, start_byte: int, end_byte: int, kind: str
 ):
     chunk_text = source_code[start_byte:end_byte].decode("utf-8", errors="ignore")
@@ -159,7 +163,19 @@ def count_chunk(
     token_count = len(
         _worker_tokenizer.encode(contextualized_text, add_special_tokens=False).ids
     )
-    return char_count, token_count
+    document_key = f"{file_path.as_posix()}:{start_byte}:{end_byte}:{kind}"
+    document_id = hashlib.sha256(document_key.encode("utf-8")).hexdigest()
+
+    return {
+        "id": document_id,
+        "file_path": file_path.as_posix(),
+        "kind": kind,
+        "start_byte": start_byte,
+        "end_byte": end_byte,
+        "characters": char_count,
+        "tokens": token_count,
+        "text": contextualized_text,
+    }
 
 
 def asm_chunk_starts(source_code: bytes):
@@ -192,21 +208,27 @@ def process_asm_file(file_path: Path, source_code: bytes):
     if not starts and source_code:
         starts = [(0, "asm_file")]
 
+    documents = []
     file_char_count = 0
     file_token_count = 0
     file_chunk_count = 0
 
     for index, (start_byte, kind) in enumerate(starts):
         end_byte = starts[index + 1][0] if index + 1 < len(starts) else len(source_code)
-        char_count, token_count = count_chunk(
-            file_path, source_code, start_byte, end_byte, kind
+        document = build_chunk_document(
+            file_path=file_path,
+            source_code=source_code,
+            start_byte=start_byte,
+            end_byte=end_byte,
+            kind=kind,
         )
 
-        file_char_count += char_count
-        file_token_count += token_count
+        documents.append(document)
+        file_char_count += document["characters"]
+        file_token_count += document["tokens"]
         file_chunk_count += 1
 
-    return file_chunk_count, file_char_count, file_token_count
+    return file_chunk_count, file_char_count, file_token_count, documents
 
 
 def is_shell_file(file_path: Path):
@@ -252,21 +274,27 @@ def process_shell_file(file_path: Path, source_code: bytes):
     if not starts and source_code:
         starts = [(0, "shell_script")]
 
+    documents = []
     file_char_count = 0
     file_token_count = 0
     file_chunk_count = 0
 
     for index, (start_byte, kind) in enumerate(starts):
         end_byte = starts[index + 1][0] if index + 1 < len(starts) else len(source_code)
-        char_count, token_count = count_chunk(
-            file_path, source_code, start_byte, end_byte, kind
+        document = build_chunk_document(
+            file_path=file_path,
+            source_code=source_code,
+            start_byte=start_byte,
+            end_byte=end_byte,
+            kind=kind,
         )
 
-        file_char_count += char_count
-        file_token_count += token_count
+        documents.append(document)
+        file_char_count += document["characters"]
+        file_token_count += document["tokens"]
         file_chunk_count += 1
 
-    return file_chunk_count, file_char_count, file_token_count
+    return file_chunk_count, file_char_count, file_token_count, documents
 
 
 def process_source_file(file_path: Path):
@@ -282,14 +310,15 @@ def process_source_file(file_path: Path):
         file_char_count = 0
         file_token_count = 0
         file_chunk_count = 0
+        documents = []
 
         if file_path.suffix in ASM_EXTENSIONS:
-            file_chunk_count, file_char_count, file_token_count = process_asm_file(
-                file_path, source_code
+            file_chunk_count, file_char_count, file_token_count, documents = (
+                process_asm_file(file_path, source_code)
             )
         elif is_shell_file(file_path):
-            file_chunk_count, file_char_count, file_token_count = process_shell_file(
-                file_path, source_code
+            file_chunk_count, file_char_count, file_token_count, documents = (
+                process_shell_file(file_path, source_code)
             )
         else:
             parser = _worker_parsers[file_path.suffix]
@@ -306,12 +335,17 @@ def process_source_file(file_path: Path):
                 items = captures
 
             for node, capture_name in items:
-                char_count, token_count = count_chunk(
-                    file_path, source_code, node.start_byte, node.end_byte, capture_name
+                document = build_chunk_document(
+                    file_path=file_path,
+                    source_code=source_code,
+                    start_byte=node.start_byte,
+                    end_byte=node.end_byte,
+                    kind=capture_name,
                 )
 
-                file_char_count += char_count
-                file_token_count += token_count
+                documents.append(document)
+                file_char_count += document["characters"]
+                file_token_count += document["tokens"]
                 file_chunk_count += 1
 
         row = [
@@ -322,9 +356,9 @@ def process_source_file(file_path: Path):
             format_cost(file_token_count),
         ]
 
-        return row, file_chunk_count, file_char_count, file_token_count, None
+        return row, file_chunk_count, file_char_count, file_token_count, documents, None
     except Exception as e:
-        return None, 0, 0, 0, f"Failed to process {file_path}: {e}"
+        return None, 0, 0, 0, [], f"Failed to process {file_path}: {e}"
 
 
 def process_pool_context():
@@ -366,15 +400,26 @@ def print_progress(
     )
 
 
+def write_documents(documents_file, documents: list[dict]):
+    for document in documents:
+        documents_file.write(json.dumps(document, ensure_ascii=False) + "\n")
+
+
 def process_kernel_directory(
-    target_directory: str, output_csv_path: str, workers: int | None = None
+    target_directory: str,
+    output_csv_path: str,
+    output_documents_dir: str | None = "kernel_embedding_documents",
+    workers: int | None = None,
 ):
     """
-    Recursively scans a directory for C source files, calculates
-    embedding extraction metrics, and saves the statistics to a file.
+    Recursively scans a directory for supported source files, calculates
+    embedding extraction metrics, and saves statistics and documents.
     """
     # Path object prevents unescaped unicode (\uXXXX) syntax errors in path strings
     dir_path = Path(target_directory)
+    documents_dir = Path(output_documents_dir) if output_documents_dir else None
+    documents_path = documents_dir / DOCUMENTS_JSONL if documents_dir else None
+    manifest_path = documents_dir / MANIFEST_JSON if documents_dir else None
 
     statistics = []
     total_chars = 0
@@ -412,44 +457,77 @@ def process_kernel_directory(
         return
 
     print(f"Processing {len(source_files)} files with {worker_count} worker processes.")
+    if documents_dir:
+        documents_dir.mkdir(parents=True, exist_ok=True)
+        print(f"Writing embedding documents to {documents_path}")
+
     start_time = time.monotonic()
     results = [None] * len(source_files)
 
-    with ProcessPoolExecutor(
-        max_workers=worker_count,
-        mp_context=process_pool_context(),
-        initializer=init_worker,
-    ) as pool:
-        futures = {
-            pool.submit(process_source_file, file_path): index
-            for index, file_path in enumerate(source_files)
+    documents_file = (
+        open(documents_path, "w", encoding="utf-8") if documents_path else None
+    )
+    try:
+        with ProcessPoolExecutor(
+            max_workers=worker_count,
+            mp_context=process_pool_context(),
+            initializer=init_worker,
+        ) as pool:
+            futures = {
+                pool.submit(process_source_file, file_path): index
+                for index, file_path in enumerate(source_files)
+            }
+
+            for future in as_completed(futures):
+                index = futures[future]
+                (
+                    row,
+                    file_chunk_count,
+                    file_char_count,
+                    file_token_count,
+                    documents,
+                    error,
+                ) = future.result()
+                processed_files += 1
+
+                if error:
+                    # Log failure but continue processing the rest of the kernel tree
+                    print(error)
+                else:
+                    results[index] = row
+                    total_chars += file_char_count
+                    total_tokens += file_token_count
+                    total_chunks += file_chunk_count
+                    if documents_file:
+                        write_documents(documents_file, documents)
+
+                if should_report_progress(processed_files, len(source_files)):
+                    print_progress(
+                        processed_files,
+                        len(source_files),
+                        total_chars,
+                        total_tokens,
+                        total_chunks,
+                        start_time,
+                    )
+    finally:
+        if documents_file:
+            documents_file.close()
+
+    if manifest_path:
+        manifest = {
+            "target_directory": dir_path.as_posix(),
+            "statistics_csv": Path(output_csv_path).as_posix(),
+            "documents_jsonl": documents_path.as_posix(),
+            "processed_files": len(source_files),
+            "chunks": total_chunks,
+            "characters": total_chars,
+            "tokens": total_tokens,
+            "cost_usd": format_cost(total_tokens),
         }
-
-        for future in as_completed(futures):
-            index = futures[future]
-            row, file_chunk_count, file_char_count, file_token_count, error = (
-                future.result()
-            )
-            processed_files += 1
-
-            if error:
-                # Log failure but continue processing the rest of the kernel tree
-                print(error)
-            else:
-                results[index] = row
-                total_chars += file_char_count
-                total_tokens += file_token_count
-                total_chunks += file_chunk_count
-
-            if should_report_progress(processed_files, len(source_files)):
-                print_progress(
-                    processed_files,
-                    len(source_files),
-                    total_chars,
-                    total_tokens,
-                    total_chunks,
-                    start_time,
-                )
+        with open(manifest_path, "w", encoding="utf-8") as manifest_file:
+            json.dump(manifest, manifest_file, indent=2)
+            manifest_file.write("\n")
 
     statistics.extend(row for row in results if row is not None)
 
@@ -470,13 +548,18 @@ def process_kernel_directory(
     print(f"Used {worker_count} worker processes.")
     print(f"Estimated total cost: {format_cost(total_tokens)}")
     print(f"Statistics saved to {output_csv_path}")
+    if documents_path:
+        print(f"Documents saved to {documents_path}")
+    if manifest_path:
+        print(f"Manifest saved to {manifest_path}")
 
 
 if __name__ == "__main__":
     TARGET_FOLDER = r"linux-7.0.2"
     OUTPUT_FILE = r"kernel_embedding_statistics.csv"
+    OUTPUT_DOCUMENTS_DIR = r"kernel_embedding_documents"
 
     if Path(TARGET_FOLDER).exists():
-        process_kernel_directory(TARGET_FOLDER, OUTPUT_FILE)
+        process_kernel_directory(TARGET_FOLDER, OUTPUT_FILE, OUTPUT_DOCUMENTS_DIR)
     else:
         print(f"Directory not found: {TARGET_FOLDER}")

@@ -23,6 +23,27 @@ uv sync
 uv run token_counting.py
 ```
 
+The script writes:
+
+- `kernel_embedding_statistics.csv`: per-file chunk, character, token, and cost totals.
+- `kernel_embedding_documents/documents.jsonl`: one embedding-ready document per line.
+- `kernel_embedding_documents/manifest.json`: run metadata and corpus totals.
+
+Each JSONL document has this shape:
+
+```json
+{
+  "id": "stable sha256 id",
+  "file_path": "linux-7.0.2/path/to/source.c",
+  "kind": "function",
+  "start_byte": 123,
+  "end_byte": 456,
+  "characters": 333,
+  "tokens": 111,
+  "text": "// File: linux-7.0.2/path/to/source.c\n// Type: function\n..."
+}
+```
+
 Output:
 
 ```
