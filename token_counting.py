@@ -13,7 +13,18 @@ import tree_sitter_rust as tsr
 from tokenizers import Tokenizer
 from tree_sitter import Language, Parser, Query, QueryCursor
 
-CPP_EXTENSIONS = (".C", ".cc", ".cpp", ".cxx", ".H", ".hh", ".hpp", ".hxx", ".ipp", ".ixx")
+CPP_EXTENSIONS = (
+    ".C",
+    ".cc",
+    ".cpp",
+    ".cxx",
+    ".H",
+    ".hh",
+    ".hpp",
+    ".hxx",
+    ".ipp",
+    ".ixx",
+)
 
 C_QUERY_STRING = """
 (function_definition) @function
