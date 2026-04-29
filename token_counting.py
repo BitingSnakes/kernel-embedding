@@ -118,12 +118,12 @@ def init_worker():
     _worker_tokenizer = build_tokenizer()
 
 
-def count_chunk(file_path: Path, source_code: bytes, start_byte: int, end_byte: int, kind: str):
+def count_chunk(
+    file_path: Path, source_code: bytes, start_byte: int, end_byte: int, kind: str
+):
     chunk_text = source_code[start_byte:end_byte].decode("utf-8", errors="ignore")
     contextualized_text = (
-        f"// File: {file_path.as_posix()}\n"
-        f"// Type: {kind}\n"
-        f"{chunk_text}"
+        f"// File: {file_path.as_posix()}\n// Type: {kind}\n{chunk_text}"
     )
     char_count = len(contextualized_text)
     token_count = len(
