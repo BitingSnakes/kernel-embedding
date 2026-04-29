@@ -7,35 +7,51 @@ from multiprocessing import get_context
 from pathlib import Path
 
 import tree_sitter_c as tsc
+import tree_sitter_cpp as tscpp
 import tree_sitter_python as tsp
 import tree_sitter_rust as tsr
 from tokenizers import Tokenizer
 from tree_sitter import Language, Parser, Query, QueryCursor
 
-QUERY_STRINGS = {
-    ".c": """
+CPP_EXTENSIONS = (".C", ".cc", ".cpp", ".cxx", ".H", ".hh", ".hpp", ".hxx", ".ipp", ".ixx")
+
+C_QUERY_STRING = """
 (function_definition) @function
 (struct_specifier) @struct
 (preproc_def) @macro
-""",
-    ".h": """
+"""
+
+CPP_QUERY_STRING = """
 (function_definition) @function
+(class_specifier) @class
 (struct_specifier) @struct
+(union_specifier) @union
+(enum_specifier) @enum
 (preproc_def) @macro
-""",
-    ".rs": """
+(preproc_function_def) @macro
+"""
+
+RUST_QUERY_STRING = """
 (function_item) @function
 (struct_item) @struct
 (enum_item) @enum
 (trait_item) @trait
 (impl_item) @impl
 (macro_definition) @macro
-""",
-    ".py": """
+"""
+
+PYTHON_QUERY_STRING = """
 (function_definition) @function
 (class_definition) @class
 (decorated_definition) @decorated
-""",
+"""
+
+QUERY_STRINGS = {
+    ".c": C_QUERY_STRING,
+    ".h": C_QUERY_STRING,
+    ".rs": RUST_QUERY_STRING,
+    ".py": PYTHON_QUERY_STRING,
+    **{extension: CPP_QUERY_STRING for extension in CPP_EXTENSIONS},
 }
 ASM_EXTENSIONS = {".S", ".asm", ".s"}
 SHELL_EXTENSIONS = {".bash", ".ksh", ".sh", ".zsh"}
@@ -96,6 +112,7 @@ def init_worker():
     global _worker_parsers, _worker_query_cursors, _worker_tokenizer
 
     c_parser, c_lang = build_parser(tsc.language())
+    cpp_parser, cpp_lang = build_parser(tscpp.language())
     python_parser, python_lang = build_parser(tsp.language())
     rust_parser, rust_lang = build_parser(tsr.language())
 
@@ -104,12 +121,14 @@ def init_worker():
         ".h": c_parser,
         ".py": python_parser,
         ".rs": rust_parser,
+        **{extension: cpp_parser for extension in CPP_EXTENSIONS},
     }
     languages = {
         ".c": c_lang,
         ".h": c_lang,
         ".py": python_lang,
         ".rs": rust_lang,
+        **{extension: cpp_lang for extension in CPP_EXTENSIONS},
     }
     _worker_query_cursors = {
         extension: QueryCursor(Query(languages[extension], query_string))
